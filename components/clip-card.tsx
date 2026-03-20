@@ -68,7 +68,7 @@ export function ClipCard({ clip, onPlay, onDelete }: ClipCardProps) {
       return (
         <div className="flex h-full flex-col items-center justify-center gap-2">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">Cargando...</span>
+          <span className="text-xs text-muted-foreground">Loading...</span>
         </div>
       )
     }
@@ -85,6 +85,7 @@ export function ClipCard({ clip, onPlay, onDelete }: ClipCardProps) {
         src={signedUrl}
         className="h-full w-full object-cover"
         preload="metadata"
+        crossOrigin="anonymous"
         muted
       />
     )

@@ -32,7 +32,6 @@ export function ClipModal({ clip, signedUrl, onClose }: ClipModalProps) {
   const handleDownload = () => {
     const a = document.createElement('a')
     a.href = signedUrl
-    a.target = "_blank"
     a.download = `${clip.title}.webm`
     document.body.appendChild(a)
     a.click()
@@ -84,6 +83,7 @@ export function ClipModal({ clip, signedUrl, onClose }: ClipModalProps) {
             src={signedUrl}
             controls
             autoPlay
+            crossOrigin="anonymous"
             className="h-full w-full"
           />
         </div>
@@ -104,7 +104,7 @@ export function ClipModal({ clip, signedUrl, onClose }: ClipModalProps) {
 
           <Button onClick={handleDownload} className="gap-2">
             <Download className="h-4 w-4" />
-            Descargar
+            Download
           </Button>
         </div>
       </div>
