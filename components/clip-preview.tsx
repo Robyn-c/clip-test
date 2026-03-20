@@ -10,12 +10,13 @@ import { createClient } from '@/lib/supabase/client'
 
 interface ClipPreviewProps {
   blob: Blob
+  duration?: number
   streamUrl?: string | null
   onSave: () => void
   onDiscard: () => void
 }
 
-export function ClipPreview({ blob, streamUrl, onSave, onDiscard }: ClipPreviewProps) {
+export function ClipPreview({ blob, duration, streamUrl, onSave, onDiscard }: ClipPreviewProps) {
   const [title, setTitle] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -40,34 +41,46 @@ export function ClipPreview({ blob, streamUrl, onSave, onDiscard }: ClipPreviewP
       const supabase = createClient()
       const { data: { user } } = await supabase.auth.getUser()
 
-      if (!user) throw new Error('You must be logged in to save clips')
+      if (!user) {
+        throw new Error('You must be logged in to save clips')
+      }
 
+      // Generate unique filename
       const timestamp = Date.now()
-      const storage_path = `${user.id}/${timestamp}.webm`
+      const filename = `${user.id}/${timestamp}.webm`
 
       // Upload to Supabase Storage
       const { error: uploadError } = await supabase.storage
         .from('clips')
-        .upload(storage_path, blob, {
+        .upload(filename, blob, {
           contentType: 'video/webm',
           upsert: false,
         })
 
-      if (uploadError) throw new Error(uploadError.message)
+      if (uploadError) {
+        throw new Error(uploadError.message)
+      }
 
-      // Insert metadata using the real schema columns
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('clips')
+        .getPublicUrl(filename)
+
+      // Save metadata to database
       const { error: dbError } = await supabase
         .from('clips')
         .insert({
           user_id: user.id,
           title: title.trim(),
-          storage_path,
-          stream_url: streamUrl ?? null,
-          duration_seconds: 60,
+          filename,
+          url: publicUrl,
+          duration_seconds: duration ?? 60,
+          file_size: blob.size,
         })
 
       if (dbError) {
-        await supabase.storage.from('clips').remove([storage_path])
+        // If database insert fails, try to delete the uploaded file
+        await supabase.storage.from('clips').remove([filename])
         throw new Error(dbError.message)
       }
 
@@ -84,18 +97,24 @@ export function ClipPreview({ blob, streamUrl, onSave, onDiscard }: ClipPreviewP
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-card-foreground">
           <Film className="h-5 w-5 text-accent" />
-          Nuevo Clip
+          New Clip
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Preview */}
         {previewUrl && (
           <div className="overflow-hidden rounded-lg border border-border">
-            <video src={previewUrl} controls className="w-full" />
+            <video
+              src={previewUrl}
+              controls
+              className="w-full"
+            />
           </div>
         )}
 
+        {/* Title input */}
         <div className="space-y-2">
-          <Label htmlFor="clip-title">Título del Clip</Label>
+          <Label htmlFor="clip-title">Clip Title</Label>
           <Input
             id="clip-title"
             placeholder="Enter a title for your clip"
@@ -105,19 +124,26 @@ export function ClipPreview({ blob, streamUrl, onSave, onDiscard }: ClipPreviewP
           />
         </div>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && (
+          <p className="text-sm text-destructive">{error}</p>
+        )}
 
+        {/* Actions */}
         <div className="flex gap-2">
-          <Button onClick={handleSave} disabled={isSaving} className="flex-1 gap-2">
+          <Button
+            onClick={handleSave}
+            disabled={isSaving}
+            className="flex-1 gap-2"
+          >
             {isSaving ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Guardando...
+                Saving...
               </>
             ) : (
               <>
                 <Save className="h-4 w-4" />
-                Guardar
+                Save Clip
               </>
             )}
           </Button>
@@ -128,12 +154,12 @@ export function ClipPreview({ blob, streamUrl, onSave, onDiscard }: ClipPreviewP
             className="gap-2 border-border"
           >
             <X className="h-4 w-4" />
-            Descartar
+            Discard
           </Button>
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Tamaño: {(blob.size / 1024 / 1024).toFixed(2)} MB
+          File size: {(blob.size / 1024 / 1024).toFixed(2)} MB
         </p>
       </CardContent>
     </Card>

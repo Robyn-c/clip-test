@@ -8,6 +8,9 @@ interface ClipData {
   duration: number
 }
 
+// How long to buffer (max clip half-length + margin)
+const BUFFER_SECONDS = 65 // supports up to 60s clips (30s each side) + margin
+
 export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | null>) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const bufferRef = useRef<{ blob: Blob; timestamp: number }[]>([])
@@ -19,14 +22,25 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioDestRef = useRef<MediaStreamAudioDestinationNode | null>(null)
+  const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null)
   const rafRef = useRef<number | null>(null)
   const isDrawingRef = useRef(false)
+
+  const ensureAudioContext = useCallback(() => {
+    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+      audioContextRef.current = new AudioContext()
+    }
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume()
+    }
+  }, [])
 
   const startBufferRecording = useCallback(() => {
     const video = videoRef.current
     if (!video) return
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      console.log('[v0] Already recording, skipping')
       return
     }
 
@@ -39,10 +53,7 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
       return
     }
 
-    // --- Video: canvas capture ---
-    if (!canvasRef.current) {
-      canvasRef.current = document.createElement('canvas')
-    }
+    if (!canvasRef.current) canvasRef.current = document.createElement('canvas')
     const canvas = canvasRef.current
     canvas.width = video.videoWidth || 1280
     canvas.height = video.videoHeight || 720
@@ -50,21 +61,16 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    // Use requestAnimationFrame instead of setInterval —
-    // browser throttles it when tab is hidden, saving CPU
     isDrawingRef.current = true
     const drawFrame = () => {
       if (!isDrawingRef.current) return
       if (video.readyState >= 2 && !video.paused) {
-        // Only resize canvas if video dimensions changed
         if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
           canvas.width = video.videoWidth || canvas.width
           canvas.height = video.videoHeight || canvas.height
         }
-        try {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-        } catch (e) {
-        }
+        try { ctx.drawImage(video, 0, 0, canvas.width, canvas.height) }
+        catch (e) { console.log('[v0] Draw error:', e) }
       }
       rafRef.current = requestAnimationFrame(drawFrame)
     }
@@ -72,37 +78,28 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
 
     const stream = canvas.captureStream(30)
 
-    // --- Audio: Web Audio API ---
     try {
-      if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-        audioContextRef.current = new AudioContext()
+      ensureAudioContext()
+      const audioCtx = audioContextRef.current!
+      if (!audioSourceRef.current) {
+        audioSourceRef.current = audioCtx.createMediaElementSource(video)
+        audioDestRef.current = audioCtx.createMediaStreamDestination()
+        audioSourceRef.current.connect(audioCtx.destination)
+        audioSourceRef.current.connect(audioDestRef.current)
       }
-      const audioCtx = audioContextRef.current
-      if (audioCtx.state === 'suspended') audioCtx.resume()
-
-      const source = audioCtx.createMediaElementSource(video)
-      audioDestRef.current = audioCtx.createMediaStreamDestination()
-      source.connect(audioCtx.destination)
-      source.connect(audioDestRef.current)
-
-      audioDestRef.current.stream.getAudioTracks().forEach(track => {
-        stream.addTrack(track)
-      })
+      audioDestRef.current!.stream.getAudioTracks().forEach(track => stream.addTrack(track))
     } catch (e) {
+      console.log('[v0] Audio setup error:', e)
       if (audioDestRef.current) {
         audioDestRef.current.stream.getAudioTracks().forEach(track => stream.addTrack(track))
       }
     }
 
     const mimeType =
-      MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
-        ? 'video/webm;codecs=vp9,opus'
-        : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
-          ? 'video/webm;codecs=vp8,opus'
-          : MediaRecorder.isTypeSupported('video/webm')
-            ? 'video/webm'
-            : 'video/mp4'
-
+      MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus'
+      : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus') ? 'video/webm;codecs=vp8,opus'
+      : MediaRecorder.isTypeSupported('video/webm') ? 'video/webm'
+      : 'video/mp4'
 
     const mediaRecorder = new MediaRecorder(stream, { mimeType })
     mediaRecorderRef.current = mediaRecorder
@@ -113,8 +110,7 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
         const timestamp = Date.now()
         bufferRef.current.push({ blob: event.data, timestamp })
 
-        // Keep only last 35 seconds
-        const cutoffTime = timestamp - 35000
+        const cutoffTime = timestamp - (BUFFER_SECONDS * 1000)
         bufferRef.current = bufferRef.current.filter(chunk => chunk.timestamp > cutoffTime)
 
         if (bufferRef.current.length > 0) {
@@ -124,12 +120,11 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
       }
     }
 
-    mediaRecorder.onerror = (event) => console.log('MediaRecorder error:', event)
-    mediaRecorder.onstart = () => console.log('MediaRecorder started')
-
+    mediaRecorder.onerror = (e) => console.log('[v0] MediaRecorder error:', e)
     mediaRecorder.start(1000)
     setIsRecording(true)
     recordingStartTimeRef.current = Date.now()
+    console.log('[v0] Recording started')
 
     return () => {
       isDrawingRef.current = false
@@ -137,43 +132,52 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
       if (mediaRecorder.state !== 'inactive') mediaRecorder.stop()
       setIsRecording(false)
     }
-  }, [videoRef])
+  }, [videoRef, ensureAudioContext])
 
-  const createQuickClip = useCallback(async (): Promise<ClipData | null> => {
+  /**
+   * Creates a clip centered on the moment the button was pressed.
+   * halfDuration = seconds before AND after the press (e.g. 15 = 30s total clip)
+   * After pressing, waits halfDuration seconds to collect post-clip footage.
+   */
+  const createClip = useCallback(async (totalDurationSeconds: number): Promise<ClipData | null> => {
     if (bufferRef.current.length === 0) return null
 
+    const halfDuration = totalDurationSeconds / 2
     setIsCapturing(true)
 
-    const now = Date.now()
-    const thirtySecondsAgo = now - 30000
-    const clipChunks = bufferRef.current
-      .filter(chunk => chunk.timestamp >= thirtySecondsAgo)
+    const pressTime = Date.now()
+    const preStart = pressTime - (halfDuration * 1000)
+
+    console.log(`[v0] Clip pressed — waiting ${halfDuration}s for post-clip footage...`)
+
+    // Wait for post-clip footage
+    await new Promise<void>(resolve => setTimeout(resolve, halfDuration * 1000))
+
+    const postEnd = Date.now()
+
+    // Grab all chunks that fall within [preStart, postEnd]
+    const chunks = bufferRef.current
+      .filter(chunk => chunk.timestamp >= preStart && chunk.timestamp <= postEnd)
       .map(chunk => chunk.blob)
 
-    if (clipChunks.length === 0) {
+    if (chunks.length === 0) {
       setIsCapturing(false)
       return null
     }
 
-    const blob = new Blob(clipChunks, { type: 'video/webm' })
-    const clipResult: ClipData = {
+    const blob = new Blob(chunks, { type: 'video/webm' })
+    const result: ClipData = {
       blob,
-      timestamp: now,
-      duration: Math.min(30, bufferDuration),
+      timestamp: pressTime,
+      duration: totalDurationSeconds,
     }
 
-    setClipData(clipResult)
+    setClipData(result)
     setIsCapturing(false)
-    return clipResult
-  }, [bufferDuration])
-
-  const createClip = useCallback(async (): Promise<ClipData | null> => {
-    return createQuickClip()
-  }, [createQuickClip])
-
-  const clearClipData = useCallback(() => {
-    setClipData(null)
+    return result
   }, [])
+
+  const clearClipData = useCallback(() => setClipData(null), [])
 
   useEffect(() => {
     return () => {
@@ -191,8 +195,8 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
     clipData,
     bufferDuration,
     startBufferRecording,
+    ensureAudioContext,
     createClip,
-    createQuickClip,
     clearClipData,
   }
 }

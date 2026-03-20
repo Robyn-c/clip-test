@@ -16,13 +16,12 @@ export function useHlsPlayer(streamUrl: string | null) {
     const video = videoRef.current
     if (!video || !streamUrl) return
 
+    console.log('[v0] HLS Player: Loading stream', streamUrl)
     setIsLoading(true)
     setError(null)
-    
-    // Set crossOrigin to allow canvas capture for clipping
-    video.crossOrigin = 'anonymous'
 
     if (Hls.isSupported()) {
+      console.log('[v0] HLS is supported, creating instance')
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: true,
@@ -34,8 +33,10 @@ export function useHlsPlayer(streamUrl: string | null) {
       hls.attachMedia(video)
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('[v0] HLS manifest parsed, attempting autoplay')
         setIsLoading(false)
         video.play().catch((e) => {
+          console.log('[v0] Autoplay blocked:', e)
           // Autoplay blocked, user needs to click play
         })
       })
