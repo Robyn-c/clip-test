@@ -8,12 +8,13 @@ interface ClipData {
   duration: number
 }
 
-// How long to buffer (max clip half-length + margin)
-const BUFFER_SECONDS = 65 // supports up to 60s clips (30s each side) + margin
+const BUFFER_SECONDS = 65
 
 export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | null>) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const bufferRef = useRef<{ blob: Blob; timestamp: number }[]>([])
+  // The very first chunk contains WebM init headers — must always be prepended to clips
+  const initChunkRef = useRef<Blob | null>(null)
   const recordingStartTimeRef = useRef<number>(0)
   const [isRecording, setIsRecording] = useState(false)
   const [isCapturing, setIsCapturing] = useState(false)
@@ -101,30 +102,50 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
       : MediaRecorder.isTypeSupported('video/webm') ? 'video/webm'
       : 'video/mp4'
 
+    console.log('[v0] Using mime type:', mimeType)
+
     const mediaRecorder = new MediaRecorder(stream, { mimeType })
     mediaRecorderRef.current = mediaRecorder
     bufferRef.current = []
+    initChunkRef.current = null  // reset init chunk on new recording
 
+    let isFirstChunk = true
     mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
         const timestamp = Date.now()
+
+        if (isFirstChunk) {
+          // Save the init segment — it contains WebM headers needed to decode any clip
+          initChunkRef.current = event.data
+          isFirstChunk = false
+          console.log('[v0] Init chunk saved, size:', event.data.size)
+          // Also add to buffer with a very old timestamp so it's never pruned by time
+          bufferRef.current.push({ blob: event.data, timestamp: 0 })
+          return
+        }
+
         bufferRef.current.push({ blob: event.data, timestamp })
 
+        // Prune old chunks but never remove index 0 (the init chunk)
         const cutoffTime = timestamp - (BUFFER_SECONDS * 1000)
-        bufferRef.current = bufferRef.current.filter(chunk => chunk.timestamp > cutoffTime)
+        bufferRef.current = [
+          bufferRef.current[0], // always keep init chunk
+          ...bufferRef.current.slice(1).filter(chunk => chunk.timestamp > cutoffTime)
+        ]
 
-        if (bufferRef.current.length > 0) {
-          const newDuration = Math.floor((timestamp - bufferRef.current[0].timestamp) / 1000)
+        if (bufferRef.current.length > 1) {
+          const newDuration = Math.floor((timestamp - bufferRef.current[1].timestamp) / 1000)
           setBufferDuration(newDuration)
         }
       }
     }
 
     mediaRecorder.onerror = (e) => console.log('[v0] MediaRecorder error:', e)
+    mediaRecorder.onstart = () => console.log('[v0] MediaRecorder started')
+
     mediaRecorder.start(1000)
     setIsRecording(true)
     recordingStartTimeRef.current = Date.now()
-    console.log('[v0] Recording started')
 
     return () => {
       isDrawingRef.current = false
@@ -134,13 +155,8 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
     }
   }, [videoRef, ensureAudioContext])
 
-  /**
-   * Creates a clip centered on the moment the button was pressed.
-   * halfDuration = seconds before AND after the press (e.g. 15 = 30s total clip)
-   * After pressing, waits halfDuration seconds to collect post-clip footage.
-   */
   const createClip = useCallback(async (totalDurationSeconds: number): Promise<ClipData | null> => {
-    if (bufferRef.current.length === 0) return null
+    if (bufferRef.current.length === 0 || !initChunkRef.current) return null
 
     const halfDuration = totalDurationSeconds / 2
     setIsCapturing(true)
@@ -149,23 +165,25 @@ export function useClipRecorder(videoRef: React.RefObject<HTMLVideoElement | nul
     const preStart = pressTime - (halfDuration * 1000)
 
     console.log(`[v0] Clip pressed — waiting ${halfDuration}s for post-clip footage...`)
-
-    // Wait for post-clip footage
     await new Promise<void>(resolve => setTimeout(resolve, halfDuration * 1000))
 
     const postEnd = Date.now()
 
-    // Grab all chunks that fall within [preStart, postEnd]
-    const chunks = bufferRef.current
+    // Get data chunks in the clip window (skip index 0, that's the init chunk)
+    const dataChunks = bufferRef.current
+      .slice(1)
       .filter(chunk => chunk.timestamp >= preStart && chunk.timestamp <= postEnd)
       .map(chunk => chunk.blob)
 
-    if (chunks.length === 0) {
+    if (dataChunks.length === 0) {
       setIsCapturing(false)
       return null
     }
 
-    const blob = new Blob(chunks, { type: 'video/webm' })
+    // ALWAYS prepend the init chunk so the blob is a valid decodable WebM
+    const blob = new Blob([initChunkRef.current, ...dataChunks], { type: 'video/webm' })
+    console.log('[v0] Clip blob size:', blob.size, 'chunks:', dataChunks.length)
+
     const result: ClipData = {
       blob,
       timestamp: pressTime,
