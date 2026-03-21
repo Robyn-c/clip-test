@@ -1,17 +1,14 @@
 -- Create clips table for storing clip metadata
-CREATE TABLE IF NOT EXISTS public.clips (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  description TEXT,
-  storage_path TEXT NOT NULL,
-  thumbnail_path TEXT,
-  duration_seconds INTEGER DEFAULT 60,
-  stream_url TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+create table clips (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users not null,
+  title text not null,
+  storage_path text not null,
+  public_url text,
+  stream_url text,
+  duration_seconds int,
+  created_at timestamp default now()
 );
-
 -- Enable Row Level Security
 ALTER TABLE public.clips ENABLE ROW LEVEL SECURITY;
 

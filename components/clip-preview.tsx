@@ -28,69 +28,52 @@ export function ClipPreview({ blob, duration, streamUrl, onSave, onDiscard }: Cl
     return () => URL.revokeObjectURL(url)
   }, [blob])
 
-  const handleSave = async () => {
-    if (!title.trim()) {
-      setError('Please enter a title for your clip')
-      return
-    }
-
-    setIsSaving(true)
-    setError(null)
-
-    try {
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-
-      if (!user) {
-        throw new Error('You must be logged in to save clips')
-      }
-
-      // Generate unique filename
-      const timestamp = Date.now()
-      const filename = `${user.id}/${timestamp}.webm`
-
-      // Upload to Supabase Storage
-      const { error: uploadError } = await supabase.storage
-        .from('clips')
-        .upload(filename, blob, {
-          contentType: 'video/webm',
-          upsert: false,
-        })
-
-      if (uploadError) {
-        throw new Error(uploadError.message)
-      }
-
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('clips')
-        .getPublicUrl(filename)
-
-      // Save metadata to database
-      const { error: dbError } = await supabase
-        .from('clips')
-        .insert({
-          user_id: user.id,
-          title: title.trim(),
-          filename,
-          url: publicUrl,
-          duration_seconds: duration ?? 60,
-          file_size: blob.size,
-        })
-
-      if (dbError) {
-        // If database insert fails, try to delete the uploaded file
-        await supabase.storage.from('clips').remove([filename])
-        throw new Error(dbError.message)
-      }
-
-      onSave()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save clip')
-    } finally {
-      setIsSaving(false)
-    }
+const handleSave = async () => {
+  if (!title.trim()) {
+    setError('Please enter a title')
+    return
   }
+
+  setIsSaving(true)
+  setError(null)
+
+  try {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error('Not logged in')
+
+    const fileName = `${user.id}/${Date.now()}.webm`
+
+    const { error: uploadError } = await supabase.storage
+      .from('clips')
+      .upload(fileName, blob)
+
+    if (uploadError) throw uploadError
+
+    const { data: publicUrlData } = supabase.storage
+      .from('clips')
+      .getPublicUrl(fileName)
+
+    const publicUrl = publicUrlData.publicUrl
+
+    const { error: dbError } = await supabase.from('clips').insert({
+      user_id: user.id,
+      title,
+      storage_path: fileName,
+      public_url: publicUrl,
+      stream_url: streamUrl,
+      duration_seconds: duration
+    })
+
+    if (dbError) throw dbError
+
+    onSave()
+  } catch (err: any) {
+    setError(err.message)
+  } finally {
+    setIsSaving(false)
+  }
+}
 
   return (
     <Card className="border-border bg-card">
@@ -101,18 +84,12 @@ export function ClipPreview({ blob, duration, streamUrl, onSave, onDiscard }: Cl
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Preview */}
         {previewUrl && (
           <div className="overflow-hidden rounded-lg border border-border">
-            <video
-              src={previewUrl}
-              controls
-              className="w-full"
-            />
+            <video src={previewUrl} controls className="w-full" />
           </div>
         )}
 
-        {/* Title input */}
         <div className="space-y-2">
           <Label htmlFor="clip-title">Clip Title</Label>
           <Input
@@ -124,27 +101,14 @@ export function ClipPreview({ blob, duration, streamUrl, onSave, onDiscard }: Cl
           />
         </div>
 
-        {error && (
-          <p className="text-sm text-destructive">{error}</p>
-        )}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
-        {/* Actions */}
         <div className="flex gap-2">
-          <Button
-            onClick={handleSave}
-            disabled={isSaving}
-            className="flex-1 gap-2"
-          >
+          <Button onClick={handleSave} disabled={isSaving} className="flex-1 gap-2">
             {isSaving ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Saving...
-              </>
+              <><Loader2 className="h-4 w-4 animate-spin" />Saving...</>
             ) : (
-              <>
-                <Save className="h-4 w-4" />
-                Save Clip
-              </>
+              <><Save className="h-4 w-4" />Save Clip</>
             )}
           </Button>
           <Button

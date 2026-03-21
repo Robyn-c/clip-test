@@ -5,6 +5,7 @@ import { Header } from '@/components/header'
 import { StreamPlayer } from '@/components/stream-player'
 import { StreamInput } from '@/components/stream-input'
 import { ClipPreview } from '@/components/clip-preview'
+import { ClipsPanel } from '@/components/clips-panel'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Scissors, Info } from 'lucide-react'
 
@@ -15,6 +16,7 @@ interface StreamPageClientProps {
 export function StreamPageClient({ userEmail }: StreamPageClientProps) {
   const [streamUrl, setStreamUrl] = useState<string | null>(null)
   const [pendingClip, setPendingClip] = useState<{ blob: Blob; duration: number } | null>(null)
+  const [clipsOpen, setClipsOpen] = useState(false)
 
   const handleClipCreated = (blob: Blob, duration: number) => {
     setPendingClip({ blob, duration })
@@ -30,7 +32,10 @@ export function StreamPageClient({ userEmail }: StreamPageClientProps) {
 
   return (
     <div className="min-h-screen bg-background">
-      <Header userEmail={userEmail} />
+      <Header
+        userEmail={userEmail}
+        onClipsClick={() => setClipsOpen(true)}
+      />
 
       <main className="mx-auto max-w-7xl px-4 py-8">
         <div className="grid gap-6 lg:grid-cols-3">
@@ -44,11 +49,11 @@ export function StreamPageClient({ userEmail }: StreamPageClientProps) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <StreamInput 
-                  onStreamLoad={setStreamUrl} 
-                  currentUrl={streamUrl} 
+                <StreamInput
+                  onStreamLoad={setStreamUrl}
+                  currentUrl={streamUrl}
                 />
-                <StreamPlayer 
+                <StreamPlayer
                   streamUrl={streamUrl}
                   onClipCreated={handleClipCreated}
                 />
@@ -81,8 +86,8 @@ export function StreamPageClient({ userEmail }: StreamPageClientProps) {
                 <ol className="list-inside list-decimal space-y-2 text-sm text-muted-foreground">
                   <li>Enter an HLS stream URL (.m3u8)</li>
                   <li>Click &quot;Load Stream&quot; to start watching</li>
-                  <li>The player will buffer the last 30 seconds</li>
-                  <li>Click &quot;Clip last 30s&quot; to capture footage</li>
+                  <li>The player buffers continuously in the background</li>
+                  <li>Choose a clip duration and click &quot;Clip&quot;</li>
                   <li>Preview and save your clip to your gallery</li>
                 </ol>
               </CardContent>
@@ -90,6 +95,12 @@ export function StreamPageClient({ userEmail }: StreamPageClientProps) {
           </div>
         </div>
       </main>
+
+      {/* Clips slide-over panel — stream stays mounted */}
+      <ClipsPanel
+        isOpen={clipsOpen}
+        onClose={() => setClipsOpen(false)}
+      />
     </div>
   )
 }

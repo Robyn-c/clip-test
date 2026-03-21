@@ -82,6 +82,7 @@ export async function POST(request: NextRequest) {
         user_id: user.id,
         title: title.trim(),
         filename,
+        storage_path: filename,
         url: publicUrl,
         duration: 30,
         file_size: file.size,
