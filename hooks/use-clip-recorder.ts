@@ -66,7 +66,13 @@ export function useClipRecorder(
     }
 
     const startRecording = () => {
-      if (isRecordingRef.current) return;
+      if (isRecordingRef.current) {
+        console.log("[v0] Already recording, skipping");
+        return;
+      }
+      
+      console.log("[v0] Starting background recording...");
+      console.log("[v0] Video state - paused:", video.paused, "readyState:", video.readyState);
       
       try {
         const stream = getCaptureStream(video);
@@ -76,6 +82,8 @@ export function useClipRecorder(
           setIsSupported(false);
           return;
         }
+        
+        console.log("[v0] Got capture stream with", stream.getTracks().length, "tracks");
         
         // Check for supported mime types
         let mimeType = "video/webm;codecs=vp8,opus";
