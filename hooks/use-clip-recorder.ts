@@ -20,6 +20,23 @@ interface TimestampedChunk {
 
 const MAX_BUFFER_DURATION = 120; // Keep 2 minutes of buffer
 
+// Extended HTMLVideoElement type to include browser-specific captureStream methods
+interface ExtendedHTMLVideoElement extends HTMLVideoElement {
+  captureStream?: (frameRate?: number) => MediaStream;
+  mozCaptureStream?: (frameRate?: number) => MediaStream;
+}
+
+// Helper to get the capture stream from a video element
+function getCaptureStream(video: ExtendedHTMLVideoElement): MediaStream | null {
+  if (typeof video.captureStream === "function") {
+    return video.captureStream();
+  }
+  if (typeof video.mozCaptureStream === "function") {
+    return video.mozCaptureStream();
+  }
+  return null;
+}
+
 export function useClipRecorder(
   videoRef: React.RefObject<HTMLVideoElement | null>,
   streamUrl: string
@@ -32,10 +49,11 @@ export function useClipRecorder(
   const [clipResult, setClipResult] = useState<ClipResult | null>(null);
   const [isBuffering, setIsBuffering] = useState(false);
   const [bufferDuration, setBufferDuration] = useState(0);
+  const [isSupported, setIsSupported] = useState(true);
 
   // Start continuous background recording when stream is active
   useEffect(() => {
-    const video = videoRef.current;
+    const video = videoRef.current as ExtendedHTMLVideoElement | null;
     if (!video || !streamUrl) {
       // Clean up if no video or stream
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -51,7 +69,13 @@ export function useClipRecorder(
       if (isRecordingRef.current) return;
       
       try {
-        const stream = video.captureStream();
+        const stream = getCaptureStream(video);
+        
+        if (!stream) {
+          console.warn("[v0] captureStream not supported in this browser");
+          setIsSupported(false);
+          return;
+        }
         
         // Check for supported mime types
         let mimeType = "video/webm;codecs=vp8,opus";
@@ -196,5 +220,6 @@ export function useClipRecorder(
     recordClip,
     isBuffering,
     bufferDuration,
+    isSupported,
   };
 }

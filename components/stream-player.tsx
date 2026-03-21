@@ -44,6 +44,7 @@ export function StreamPlayer({ streamUrl, onClipCreated }: StreamPlayerProps) {
     recordClip,
     isBuffering,
     bufferDuration,
+    isSupported,
   } = useClipRecorder(videoRef, streamUrl || '')
 
   const [volume, setVolume] = useState(1)
@@ -128,6 +129,7 @@ export function StreamPlayer({ streamUrl, onClipCreated }: StreamPlayerProps) {
   }
 
   const canClip =
+    isSupported &&
     !isRecordingClip &&
     bufferDuration >= clipDuration
 
@@ -174,16 +176,20 @@ export function StreamPlayer({ streamUrl, onClipCreated }: StreamPlayerProps) {
         <div className="flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5">
           <Circle className={cn(
             "h-3 w-3",
-            isBuffering 
-              ? "animate-pulse fill-red-500 text-red-500" 
-              : "fill-yellow-500 text-yellow-500"
+            !isSupported
+              ? "fill-gray-500 text-gray-500"
+              : isBuffering 
+                ? "animate-pulse fill-red-500 text-red-500" 
+                : "fill-yellow-500 text-yellow-500"
           )} />
           <span className="text-xs text-foreground">
-            {isRecordingClip
-              ? "Creating clip..."
-              : isBuffering
-                ? `Buffer: ${bufferDuration}s`
-                : "Waiting for playback..."}
+            {!isSupported
+              ? "Clipping not supported in this browser"
+              : isRecordingClip
+                ? "Creating clip..."
+                : isBuffering
+                  ? `Buffer: ${bufferDuration}s`
+                  : "Waiting for playback..."}
           </span>
         </div>
       </div>
@@ -246,9 +252,14 @@ export function StreamPlayer({ streamUrl, onClipCreated }: StreamPlayerProps) {
                 onClick={handleClip}
                 disabled={!canClip}
                 className="gap-2 rounded-r-none bg-accent text-accent-foreground hover:bg-accent/80"
-                title={!canClip && !isRecordingClip ? `Need ${clipDuration - bufferDuration}s more buffer` : undefined}
+                title={!canClip && !isRecordingClip ? (!isSupported ? "Browser doesn't support clip recording" : `Need ${clipDuration - bufferDuration}s more buffer`) : undefined}
               >
-                {isRecordingClip ? (
+                {!isSupported ? (
+                  <>
+                    <Scissors className="h-4 w-4" />
+                    Not supported
+                  </>
+                ) : isRecordingClip ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Creating...
