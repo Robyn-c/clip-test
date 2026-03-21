@@ -42,23 +42,16 @@ export function StreamPlayer({ streamUrl, onClipCreated }: StreamPlayerProps) {
   const {
     isRecordingClip,
     recordClip,
+    isBuffering,
+    bufferDuration,
   } = useClipRecorder(videoRef, streamUrl || '')
-
-  const bufferDuration =
-  videoRef.current && videoRef.current.buffered.length > 0
-    ? videoRef.current.buffered.end(
-        videoRef.current.buffered.length - 1
-      ) - videoRef.current.currentTime
-    : 0;
 
   const [volume, setVolume] = useState(1)
   const [showControls, setShowControls] = useState(true)
   const [clipDuration, setClipDuration] = useState(60)
   const [showDurationPicker, setShowDurationPicker] = useState(false)
-  const [countdown, setCountdown] = useState<number | null>(null)
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const countdownRef = useRef<NodeJS.Timeout | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   // -----------------------------
@@ -102,27 +95,12 @@ export function StreamPlayer({ streamUrl, onClipCreated }: StreamPlayerProps) {
   }
 
   // -----------------------------
-  // ✂️ Clip creation
+  // ✂️ Clip creation (instant from ring buffer)
   // -----------------------------
   const handleClip = async () => {
     if (isRecordingClip) return
 
-    setCountdown(clipDuration)
-
-    const tick = () => {
-      setCountdown(prev => {
-        if (prev === null || prev <= 1) return null
-        countdownRef.current = setTimeout(tick, 1000)
-        return prev - 1
-      })
-    }
-
-    countdownRef.current = setTimeout(tick, 1000)
-
     const clip = await recordClip(clipDuration)
-
-    if (countdownRef.current) clearTimeout(countdownRef.current)
-    setCountdown(null)
 
     if (clip && onClipCreated) {
       onClipCreated(clip.blob, clip.range.duration)
@@ -193,16 +171,21 @@ export function StreamPlayer({ streamUrl, onClipCreated }: StreamPlayerProps) {
 
       {/* Buffer indicator */}
       <div className="absolute left-4 top-4 flex items-center gap-2">
-        (
-          <div className="flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5">
-            <Circle className="h-3 w-3 animate-pulse fill-red-500 text-red-500" />
-            <span className="text-xs text-foreground">
-              {countdown !== null
-                ? `Clipping — ${countdown}s`
-                : `Buffer: ${Math.floor(bufferDuration)}s`}
-            </span>
-          </div>
-        )
+        <div className="flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5">
+          <Circle className={cn(
+            "h-3 w-3",
+            isBuffering 
+              ? "animate-pulse fill-red-500 text-red-500" 
+              : "fill-yellow-500 text-yellow-500"
+          )} />
+          <span className="text-xs text-foreground">
+            {isRecordingClip
+              ? "Creating clip..."
+              : isBuffering
+                ? `Buffer: ${bufferDuration}s`
+                : "Waiting for playback..."}
+          </span>
+        </div>
       </div>
 
       {/* Controls */}
@@ -263,11 +246,22 @@ export function StreamPlayer({ streamUrl, onClipCreated }: StreamPlayerProps) {
                 onClick={handleClip}
                 disabled={!canClip}
                 className="gap-2 rounded-r-none bg-accent text-accent-foreground hover:bg-accent/80"
+                title={!canClip && !isRecordingClip ? `Need ${clipDuration - bufferDuration}s more buffer` : undefined}
               >
                 {isRecordingClip ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Clipping...
+                    Creating...
+                  </>
+                ) : !isBuffering ? (
+                  <>
+                    <Scissors className="h-4 w-4" />
+                    Start playback
+                  </>
+                ) : bufferDuration < clipDuration ? (
+                  <>
+                    <Scissors className="h-4 w-4" />
+                    Buffering ({bufferDuration}/{clipDuration}s)
                   </>
                 ) : (
                   <>

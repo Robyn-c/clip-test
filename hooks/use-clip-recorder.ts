@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 
 interface ClipRange {
   start: number;
@@ -13,94 +13,188 @@ interface ClipResult {
   range: ClipRange;
 }
 
+interface TimestampedChunk {
+  blob: Blob;
+  timestamp: number;
+}
+
+const MAX_BUFFER_DURATION = 120; // Keep 2 minutes of buffer
+
 export function useClipRecorder(
-videoRef: React.RefObject<HTMLVideoElement | null>, p0: string,
+  videoRef: React.RefObject<HTMLVideoElement | null>,
+  streamUrl: string
 ) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const ringBufferRef = useRef<TimestampedChunk[]>([]);
+  const isRecordingRef = useRef(false);
 
   const [isRecordingClip, setIsRecordingClip] = useState(false);
   const [clipResult, setClipResult] = useState<ClipResult | null>(null);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [bufferDuration, setBufferDuration] = useState(0);
 
-  const getClipRange = useCallback((duration: number): ClipRange | null => {
+  // Start continuous background recording when stream is active
+  useEffect(() => {
     const video = videoRef.current;
-    if (!video) return null;
+    if (!video || !streamUrl) {
+      // Clean up if no video or stream
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      ringBufferRef.current = [];
+      setBufferDuration(0);
+      setIsBuffering(false);
+      return;
+    }
 
-    const end = video.currentTime;
-    const start = Math.max(0, end - duration);
+    const startRecording = () => {
+      if (isRecordingRef.current) return;
+      
+      try {
+        const stream = video.captureStream();
+        
+        // Check for supported mime types
+        let mimeType = "video/webm;codecs=vp8,opus";
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = "video/webm;codecs=vp9,opus";
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = "video/webm";
+          }
+        }
 
-    return { start, end, duration };
-  }, [videoRef]);
+        const recorder = new MediaRecorder(stream, { mimeType });
+        mediaRecorderRef.current = recorder;
 
-  const recordClip = useCallback(async (duration: number) => {
-    const video = videoRef.current;
-    if (!video) return null;
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) {
+            const now = Date.now();
+            ringBufferRef.current.push({ blob: e.data, timestamp: now });
 
-    const range = getClipRange(duration);
-    if (!range) return null;
+            // Prune old chunks beyond MAX_BUFFER_DURATION
+            const cutoff = now - MAX_BUFFER_DURATION * 1000;
+            ringBufferRef.current = ringBufferRef.current.filter(
+              (chunk) => chunk.timestamp >= cutoff
+            );
 
-    setIsRecordingClip(true);
-    chunksRef.current = [];
+            // Calculate approximate buffer duration
+            if (ringBufferRef.current.length > 0) {
+              const oldest = ringBufferRef.current[0].timestamp;
+              const newest = ringBufferRef.current[ringBufferRef.current.length - 1].timestamp;
+              setBufferDuration(Math.floor((newest - oldest) / 1000));
+            }
+          }
+        };
 
-    const stream = video.captureStream();
+        recorder.onerror = () => {
+          isRecordingRef.current = false;
+          setIsBuffering(false);
+        };
 
-    const recorder = new MediaRecorder(stream, {
-      mimeType: "video/webm;codecs=vp8,opus",
-    });
-
-    mediaRecorderRef.current = recorder;
-
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) {
-        chunksRef.current.push(e.data);
+        // Record in 1-second chunks for granularity
+        recorder.start(1000);
+        isRecordingRef.current = true;
+        setIsBuffering(true);
+      } catch (err) {
+        console.error("[v0] Failed to start background recording:", err);
+        isRecordingRef.current = false;
+        setIsBuffering(false);
       }
     };
 
-    recorder.start();
+    // Start recording when video starts playing
+    const handlePlay = () => {
+      // Small delay to ensure video is actually playing
+      setTimeout(startRecording, 500);
+    };
 
-    const originalTime = video.currentTime;
+    const handlePause = () => {
+      // Keep recording even when paused - user might unpause
+    };
 
-    // 🔴 IMPORTANT: wait for seek to stabilize
-    video.currentTime = range.start;
+    // If video is already playing, start recording
+    if (!video.paused && video.readyState >= 2) {
+      setTimeout(startRecording, 500);
+    }
 
-    await new Promise((res) => {
-      const handler = () => {
-        video.removeEventListener("seeked", handler);
-        res(null);
+    video.addEventListener("play", handlePlay);
+    video.addEventListener("pause", handlePause);
+
+    return () => {
+      video.removeEventListener("play", handlePlay);
+      video.removeEventListener("pause", handlePause);
+
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {
+          // Ignore errors during cleanup
+        }
+      }
+      isRecordingRef.current = false;
+      ringBufferRef.current = [];
+      setBufferDuration(0);
+      setIsBuffering(false);
+    };
+  }, [videoRef, streamUrl]);
+
+  const recordClip = useCallback(async (duration: number): Promise<ClipResult | null> => {
+    const video = videoRef.current;
+    if (!video) return null;
+
+    if (ringBufferRef.current.length === 0) {
+      console.error("[v0] No buffered data available");
+      return null;
+    }
+
+    setIsRecordingClip(true);
+
+    try {
+      const now = Date.now();
+      const cutoffTime = now - duration * 1000;
+
+      // Get chunks from the last N seconds
+      const relevantChunks = ringBufferRef.current.filter(
+        (chunk) => chunk.timestamp >= cutoffTime
+      );
+
+      if (relevantChunks.length === 0) {
+        console.error("[v0] No chunks available for requested duration");
+        setIsRecordingClip(false);
+        return null;
+      }
+
+      // Combine all relevant chunks into a single blob
+      const blobs = relevantChunks.map((chunk) => chunk.blob);
+      const combinedBlob = new Blob(blobs, { type: "video/webm" });
+
+      // Calculate actual duration from chunks
+      const actualStart = relevantChunks[0].timestamp;
+      const actualEnd = relevantChunks[relevantChunks.length - 1].timestamp;
+      const actualDuration = (actualEnd - actualStart) / 1000;
+
+      const range: ClipRange = {
+        start: 0,
+        end: actualDuration,
+        duration: actualDuration,
       };
-      video.addEventListener("seeked", handler);
-    });
 
-    await video.play();
+      const result: ClipResult = { blob: combinedBlob, range };
+      setClipResult(result);
+      setIsRecordingClip(false);
 
-    await new Promise((res) =>
-      setTimeout(res, range.duration * 1000),
-    );
-
-    recorder.stop();
-
-    await new Promise((res) => {
-      recorder.onstop = res;
-    });
-
-    const blob = new Blob(chunksRef.current, {
-      type: "video/webm",
-    });
-
-    // return to live edge
-    video.currentTime = originalTime;
-    video.play().catch(() => {});
-
-    const result: ClipResult = { blob, range };
-    setClipResult(result);
-    setIsRecordingClip(false);
-
-    return result;
-  }, [videoRef, getClipRange]);
+      return result;
+    } catch (err) {
+      console.error("[v0] Error creating clip:", err);
+      setIsRecordingClip(false);
+      return null;
+    }
+  }, [videoRef]);
 
   return {
     isRecordingClip,
     clipResult,
     recordClip,
+    isBuffering,
+    bufferDuration,
   };
 }
